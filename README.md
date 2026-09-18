@@ -1,4 +1,4 @@
-# AI Pendeteksi
+# Information Detection
 
 **Prototipe asisten pemeriksaan klaim berbasis bukti dengan transformer, ekstraksi artikel, dan OCR.**
 
