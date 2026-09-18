@@ -1,0 +1,10 @@
+{
+  "manifest_version": 3,
+  "name": "CekFakta — Scan Klik Kanan",
+  "version": "1.0.0",
+  "description": "Pilih teks atau klik kanan media untuk mencari sumber dan makna istilah.",
+  "permissions": ["contextMenus", "activeTab", "scripting"],
+  "host_permissions": ["http://127.0.0.1:8000/*"],
+  "background": {"service_worker": "background.js"},
+  "action": {"default_title": "CekFakta: gunakan klik kanan → Scan"}
+}

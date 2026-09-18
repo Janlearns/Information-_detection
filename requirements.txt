@@ -1,0 +1,5 @@
+fastapi>=0.115,<1
+uvicorn>=0.30,<1
+trafilatura>=2.0,<3
+beautifulsoup4>=4.12,<5
+ddgs>=9,<10
