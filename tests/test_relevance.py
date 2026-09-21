@@ -8,6 +8,12 @@ from app.main import ScanRequest
 
 
 class RelevanceTests(unittest.TestCase):
+    def setUp(self):
+        from app.search_session import SearchSession
+        session = patch('app.context_scan.search_session', SearchSession(interval=0))
+        session.start()
+        self.addCleanup(session.stop)
+
     @patch('app.relevance.compare_pair', side_effect=[[.01, .02, .97], [.95, .02, .03], [.02, .9, .08]])
     def test_keeps_contradiction_and_support_not_unrelated(self, model):
         hits = [{'href': f'https://site{i}.org/a', 'title': f'Title {i}', 'body': f'Snippet {i}'} for i in range(3)]

@@ -10,6 +10,12 @@ from app.evidence import token_windows, aggregate_passages, classify_evidence
 
 
 class FullReadingTests(unittest.TestCase):
+    def setUp(self):
+        from app.search_session import SearchSession
+        session = patch('app.context_scan.search_session', SearchSession(interval=0))
+        session.start()
+        self.addCleanup(session.stop)
+
     @patch('app.relevance.compare_pair', return_value=[.8, .1, .1])
     def test_five_hosts_including_term_search(self, relevance):
         search = Mock()

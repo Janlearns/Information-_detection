@@ -9,6 +9,10 @@ from app.context_scan import scan, term_candidates
 
 class ContextTests(unittest.TestCase):
     def setUp(self):
+        from app.search_session import SearchSession
+        session = patch('app.context_scan.search_session', SearchSession(interval=0))
+        session.start()
+        self.addCleanup(session.stop)
         relevance = patch('app.relevance.compare_pair', return_value=[.8, .1, .1])
         relevance.start()
         self.addCleanup(relevance.stop)

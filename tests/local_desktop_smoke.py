@@ -27,9 +27,27 @@ analysis = classify_evidence('Prabowo presiden ke-20', [source])
 window.show_result({'label': 'Sumber terkait ditemukan', 'text': 'Prabowo presiden ke-20',
     'reason': analysis['reason'], 'terms': [], 'sources': [source], 'limitation': '',
     'errors': [], 'analysis': analysis})
-for content in ('Komposisi bukti nomor urut', 'ke-20', 'ke-8', '1 sumber membantah', 'Kutipan angka:'):
+for content in ('Kesepakatan bukti nomor urut', 'ke-20', 'ke-8', '1 sumber membantah', 'Kutipan angka:'):
     assert content in window.output.text(), content
+sources = [dict(source, url='https://first.org', text='Contoh Nama presiden ke-12.'),
+           dict(source, url='https://second.org', text='Contoh Nama adalah presiden ke-12.'),
+           dict(source, url='https://third.org', text='Laporan kegiatan tahunan.'),
+           dict(source, url='https://fourth.org', text='Jadwal rapat mingguan.')]
+analysis = classify_evidence('Contoh Nama presiden ke-12', sources)
+window.show_result({'label': 'Sumber terkait ditemukan', 'text': 'Contoh Nama presiden ke-12',
+    'reason': analysis['reason'], 'terms': [], 'sources': sources, 'limitation': '',
+    'errors': [], 'analysis': analysis})
+for content in ('Kesepakatan mendukung: <b>100.0%', '2 dari 4 sumber unik', '2 belum cukup/ambigu'):
+    assert content in window.output.text(), content
+assert '50.0%' not in window.output.text()
 window.show_error('Coba ulang')
+with patch('app.evidence.compare_pair', side_effect=[[.01, .98, .01], [.96, .02, .02]]):
+    analysis = classify_evidence('Tanaman memerlukan cahaya. Kereta memakai diesel.', [source])
+window.show_result({'label': 'Sumber terkait ditemukan', 'text': 'Teks multikalimat',
+    'reason': analysis['reason'], 'terms': [], 'sources': [source], 'limitation': '',
+    'errors': [], 'analysis': analysis})
+for content in ('Kalimat 1', 'Kalimat 2', 'Tanaman memerlukan cahaya.', 'Kereta memakai diesel.', '98.0%', '96.0%'):
+    assert content in window.output.text(), content
 assert window.file_button.isEnabled()
 window.close()
 print('Local desktop smoke passed: idle without scanning, popup, escaped content, retry.')

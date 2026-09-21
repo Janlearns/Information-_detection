@@ -14,6 +14,14 @@
   function node(tag, text, parent = panel) {
     const el = document.createElement(tag); el.textContent = text; parent.append(el); return el;
   }
+  function consensusView(consensus, parent = panel) {
+    node('p', consensus.status, parent);
+    for (const [label, value] of Object.entries(consensus.scores || {})) {
+      node('p', `Kesepakatan ${label.toLowerCase()}: ${(value * 100).toFixed(1)}%`, parent);
+    }
+    node('p', consensus.coverage, parent);
+    node('p', consensus.note, parent).className = 'muted';
+  }
   function reset() {
     if (!host.isConnected) document.documentElement.append(host);
     host.style.display = 'block'; panel.replaceChildren();
@@ -31,7 +39,10 @@
     if (message.type !== 'scan-result') return;
     reset(); const result = message.result;
     node('h3', result.analysis?.label || 'Persentase hubungan bukti');
-    if (result.analysis?.scores) {
+    if (result.analysis?.consensus) {
+      if (result.analysis.summary) node('p', result.analysis.summary);
+      consensusView(result.analysis.consensus);
+    } else if (result.analysis?.scores) {
       if (result.analysis.summary) node('p', result.analysis.summary);
       for (const [label, value] of Object.entries(result.analysis.scores)) {
         node('p', `${label}: ${(value * 100).toFixed(1)}%`);
@@ -46,11 +57,32 @@
       node('p', result.analysis_error || 'Persentase hubungan bukti belum tersedia.');
     }
     node('h3', result.label); node('p', result.text); node('p', result.reason);
+    for (const [index, statement] of (result.analysis?.statements || []).entries()) {
+      const detail = node('details', '');
+      node('summary', `Kalimat ${index + 1}: ${statement.text}`, detail);
+      if (statement.consensus) {
+        consensusView(statement.consensus, detail);
+      } else {
+        for (const [label, value] of Object.entries(statement.scores)) {
+          node('p', `${label}: ${(value * 100).toFixed(1)}%`, detail);
+        }
+      }
+      for (const comparison of statement.comparisons || []) {
+        const url = new URL(comparison.url);
+        if (!['http:', 'https:'].includes(url.protocol)) continue;
+        const link = node('a', 'Sumber', detail);
+        link.href = url.href; link.target = '_blank'; link.rel = 'noopener noreferrer';
+        if (comparison.explanation) node('p', comparison.explanation, detail);
+        for (const [label, value] of Object.entries(comparison.scores)) {
+          node('p', `${label}: ${(value * 100).toFixed(1)}%`, detail);
+        }
+      }
+    }
     if (result.selection?.candidates?.length) {
       const selection = node('details', '');
       node('summary', 'Seleksi relevansi sebelum crawling', selection);
       for (const candidate of result.selection.candidates) {
-        node('p', `${candidate.selected ? 'Dipilih' : 'Dilewati'}: ${candidate.title || candidate.url}\n${candidate.reason}`, selection);
+        node('p', `${candidate.selected ? (candidate.read_status === 'read' ? 'Terbaca' : 'Dicoba') : 'Dilewati'}: ${candidate.title || candidate.url}\n${candidate.reason}`, selection);
       }
     }
     for (const term of result.terms || []) { node('h3', term.term); node('p', term.meaning); }
@@ -82,8 +114,7 @@
     if (result.limitation) node('p', result.limitation).className = 'muted';
     if (result.errors?.length) {
       const details = node('details', '');
-      node('summary', 'Catatan akses sumber', details);
-      node('p', 'Sebagian sumber tidak dapat diakses. Hasil di atas memakai sumber yang berhasil dibaca.', details);
+      node('summary', 'Catatan pencarian dan akses', details);
       for (const error of result.errors) node('p', error, details).className = 'muted';
     }
   });

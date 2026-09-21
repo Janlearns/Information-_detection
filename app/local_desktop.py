@@ -12,6 +12,16 @@ from app.context_scan import scan
 from app.local_scan import prepare_file
 
 
+def consensus_html(consensus):
+    parts = ['<p><b>' + escape(consensus['status']) + '</b></p>']
+    if consensus['scores'] is not None:
+        for label, value in consensus['scores'].items():
+            parts.append('<p>Kesepakatan ' + escape(label.lower()) + ': <b>' + f'{value * 100:.1f}%' + '</b></p>')
+    parts.append('<p>' + escape(consensus['coverage']) + '</p>')
+    parts.append('<p><small>' + escape(consensus['note']) + '</small></p>')
+    return ''.join(parts)
+
+
 class Events(QObject):
     done = Signal(object)
     failed = Signal(str)
@@ -101,7 +111,9 @@ class LocalScanner(QWidget):
         classification = ['<h3>' + escape((analysis or {}).get('label', 'Persentase hubungan bukti')) + '</h3>']
         if analysis and analysis.get('summary'):
             classification.append('<p>' + escape(analysis['summary']) + '</p>')
-        if analysis and analysis.get('scores'):
+        if analysis and analysis.get('consensus'):
+            classification.append(consensus_html(analysis['consensus']))
+        elif analysis and analysis.get('scores'):
             for label, value in analysis['scores'].items():
                 classification.append('<p>' + escape(label) + ': <b>' + f'{value * 100:.1f}%' + '</b></p>')
             classification.append('<p><small>' + escape(analysis['warning']) + '</small></p>')
@@ -110,6 +122,18 @@ class LocalScanner(QWidget):
         else:
             classification.append('<p>' + escape(result.get('analysis_error') or 'Persentase hubungan bukti belum tersedia.') + '</p>')
         parts = classification + parts
+        for index, statement in enumerate((analysis or {}).get('statements', []), 1):
+            parts.append('<h3>Kalimat ' + str(index) + '</h3><p>' + escape(statement['text']) + '</p>')
+            if statement.get('consensus'):
+                parts.append(consensus_html(statement['consensus']))
+            else:
+                parts.append('<p>' + '<br>'.join(escape(label) + f': {value * 100:.1f}%'
+                             for label, value in statement['scores'].items()) + '</p>')
+            for item in statement.get('comparisons', []):
+                parts.append('<p><a href="' + escape(item['url'], quote=True) + '">Sumber</a>: ' +
+                             escape(item.get('explanation') or 'Perbandingan semantik dengan kalimat ini.') + '<br>' +
+                             '<br>'.join(escape(label) + f': {value * 100:.1f}%'
+                                         for label, value in item['scores'].items()) + '</p>')
         selection = result.get('selection', {})
         if selection.get('status') == 'done':
             parts.append('<p><small>Website disaring terlebih dahulu oleh transformer melalui judul dan ringkasan pencarian. Ringkasan tidak dipakai sebagai bukti.</small></p>')
@@ -132,7 +156,8 @@ class LocalScanner(QWidget):
         if result['limitation']:
             parts.append('<p>' + escape(result['limitation']) + '</p>')
         if result['errors']:
-            parts.append('<p><small>Catatan akses: sebagian sumber tidak dapat dibaca. Hasil hanya memakai sumber yang berhasil diakses.</small></p>')
+            parts.append('<h3>Catatan pencarian dan akses</h3>')
+            parts.extend('<p><small>' + escape(error) + '</small></p>' for error in result['errors'])
         self.output.setToolTip('\n'.join(result['errors']))
         self.output.setText(''.join(parts))
 

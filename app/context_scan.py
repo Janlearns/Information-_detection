@@ -4,10 +4,16 @@ import io
 import re
 import http.client
 from concurrent.futures import ThreadPoolExecutor
-from app.crawler import crawl
+from urllib.parse import urlsplit
+from app.crawler import crawl, is_retryable_error
 from app.evidence import classify_evidence
-from app.relevance import rank_candidates
-from app.ordinal_facts import parse_claim
+from app.relevance import rank_candidates, MIN_RELEVANCE
+from app.ordinal_facts import parse_claim, compare_ordinal
+from app.text_units import search_units
+from app.search_status import error_kind, summarize_search
+from app.search_session import SearchSession, SearchPaused
+
+search_session = SearchSession()
 
 TERMS = {
     'fomo': 'Fear of missing out: takut tertinggal tren atau pengalaman orang lain.',
@@ -48,21 +54,71 @@ def read_source(url):
     for attempt in range(2):
         try:
             articles, failures = crawl(url, 1)
-            if not articles and attempt == 0 and any('timed out' in f['error'].lower() for f in failures):
+            if not articles and attempt == 0 and any(f.get('retryable') or 'timed out' in f['error'].lower() for f in failures):
                 continue
             return articles, failures
-        except (OSError, http.client.HTTPException) as exc:
-            if attempt:
-                return [], [{'url': url, 'error': str(exc)}]
-        except ValueError as exc:
-            return [], [{'url': url, 'error': str(exc)}]
+        except (ValueError, OSError, http.client.HTTPException) as exc:
+            retryable = is_retryable_error(exc)
+            if attempt or not retryable:
+                return [], [{'url': url, 'error': str(exc), 'retryable': retryable}]
 
 
 def related_excerpt(body, text):
     # Keep a complete paragraph, including surrounding sentences, without slicing.
     paragraphs = [p.strip() for p in body.splitlines() if p.strip()]
     words = set(re.findall(r'\w{4,}', text.lower()))
-    return max(paragraphs, key=lambda p: (bool(re.search(r'presiden', text, re.I) and re.search(r'presiden.{0,45}ke[ -]*\d+', p, re.I)), len(words & set(re.findall(r'\w{4,}', p.lower())))), default='')
+    ordinal = parse_claim(text)
+    return max(paragraphs, key=lambda p: (bool(ordinal and compare_ordinal(p, ordinal)['facts']),
+               len(words & set(re.findall(r'\w{4,}', p.lower())))), default='')
+
+
+def read_candidates(selection, text, target=5, max_attempts=10):
+    """Fill readable-source slots from ranked candidates, with a bounded budget.
+
+    Rank all metadata first. Failure to fetch a page never lowers the relevance
+    threshold or turns a search snippet into evidence.
+    """
+    sources, errors, attempted, queued_hosts, successful_hosts = [], [], [], set(), set()
+    ordered = list(selection['selected'])
+    ordered.extend(item for item in selection['candidates'] if item not in ordered)
+    queue = []
+    for item in ordered:
+        if item.get('relevance') is None or item['relevance'] < MIN_RELEVANCE:
+            continue
+        host = (urlsplit(item['url']).hostname or '').lower().removeprefix('www.')
+        if not host or host in queued_hosts:
+            continue
+        queued_hosts.add(host)
+        queue.append(item)
+    with ThreadPoolExecutor(max_workers=3) as pool:
+        while queue and len(sources) < target and len(attempted) < max_attempts:
+            count = min(target - len(sources), max_attempts - len(attempted), len(queue))
+            batch, queue = queue[:count], queue[count:]
+            # Do not start a full extra batch if only one readable slot remains.
+            for candidate, (articles, failures) in zip(batch, pool.map(read_source, [item['url'] for item in batch])):
+                attempted.append(candidate)
+                candidate.update(selected=True, read_status='failed')
+                candidate['read_errors'] = [failure['error'] for failure in failures]
+                errors.extend(f"{failure.get('url', candidate['url'])}: {failure['error']}" for failure in failures)
+                for article in articles:
+                    host = (urlsplit(article['url']).hostname or '').lower().removeprefix('www.')
+                    body = article.get('text', '').strip()
+                    if not body or not host or host in successful_hosts:
+                        continue
+                    successful_hosts.add(host)
+                    sources.append({'title': article['title'], 'url': article['url'],
+                                    'excerpt': related_excerpt(body, text), 'text': body,
+                                    'relevance': candidate['relevance'], 'characters_read': len(body),
+                                    'purpose': 'Pemeriksaan fakta'})
+                    candidate['read_status'] = 'read'
+                    break
+                candidate['reason'] = ('Artikel berhasil dibaca.' if candidate['read_status'] == 'read' else
+                                       'Artikel gagal dibaca; kandidat relevan berikutnya dicoba jika anggaran akses masih tersedia.')
+    selection['selected'] = attempted
+    selection['reading'] = {'attempted_hosts': len(attempted), 'read_hosts': len(sources),
+                            'target': target, 'max_attempts': max_attempts,
+                            'limit_reached': bool(queue and len(attempted) >= max_attempts and len(sources) < target)}
+    return sources, errors
 
 
 def explain_terms(candidates, sources):
@@ -105,6 +161,7 @@ def scan(request):
     from ddgs import DDGS
     errors, sources = [], []
     selection = {'selected': [], 'candidates': [], 'status': 'not_run'}
+    search_status = {'status': 'not_run', 'attempts': [], 'candidate_count': 0, 'message': ''}
     text = request.text.strip()
     if request.kind != 'text':
         try:
@@ -115,48 +172,75 @@ def scan(request):
             errors.append(request.media_note)
     terms = [{'term': term, 'meaning': meaning} for term, meaning in TERMS.items()
              if re.search(r'(?<!\w)' + re.escape(term) + r'(?!\w)', text, re.I)]
-    query = ' '.join(text.split()[:35])
-    if query:
+    query_units, total_query_units = search_units(text)
+    search_coverage = {'total_units': total_query_units, 'searched_units': len(query_units),
+                       'limited': total_query_units > len(query_units)}
+    if query_units:
         try:
             search = DDGS(timeout=10)
-            queries = [query + ' cek fakta', query]
-            ordinal = parse_claim(text)
-            if ordinal:
-                # Do not force the user's disputed number into every search.
-                queries = [f"{ordinal['subject']} urutan {ordinal['role']} {ordinal['country']}".strip(), query + ' cek fakta']
-            hits = []
+            queries = []
+            for query in query_units:
+                ordinal = parse_claim(query)
+                if ordinal:
+                    queries.extend([f"{ordinal['subject']} urutan {ordinal['role']} {ordinal['country']}".strip(), query + ' cek fakta'])
+                else:
+                    queries.extend([query + ' cek fakta', query])
+            queries = list(dict.fromkeys(queries))
+            hits, attempts = [], []
             for q in queries:
                 try:
-                    hits.extend(list(search.text(q, max_results=12)))
-                except Exception:
-                    errors.append('Pencarian sumber gagal untuk salah satu kueri.')
+                    found, cached = search_session.query(search, q)
+                    hits.extend(found)
+                    attempts.append({'query': q, 'status': 'success' if found else 'empty', 'results': len(found), 'cached': cached})
+                except SearchPaused as exc:
+                    attempts.append({'query': q, 'status': exc.kind, 'results': 0, 'deferred': True,
+                                     'retry_after_seconds': exc.retry_after})
+                except Exception as exc:
+                    attempts.append({'query': q, 'status': error_kind(exc), 'results': 0})
+            search_status = summarize_search(attempts, len(hits))
+            search_status['retry_after_seconds'] = search_session.retry_after()
+            search_status['cached_queries'] = sum(bool(item.get('cached')) for item in attempts)
+            if search_status['retry_after_seconds']:
+                search_status['message'] += f" Tunggu sekitar {search_status['retry_after_seconds']} detik sebelum mencoba kueri baru. Kueri yang masih ada di cache dapat dipakai; aplikasi tidak membatasi jumlah scan."
+            if search_status['cached_queries']:
+                search_status['message'] += f" {search_status['cached_queries']} kueri memakai cache pencarian lokal (maksimal 5 menit); artikel tetap dibaca ulang."
+            if search_status['message']:
+                errors.append(search_status['message'])
             try:
-                selection = rank_candidates(text, hits)
-                selection['status'] = 'done'
+                if hits:
+                    selection = rank_candidates(text, hits)
+                    selection['status'] = 'done'
+                else:
+                    selection['status'] = 'search_' + search_status['status']
             except Exception:
                 selection['status'] = 'failed'
                 errors.append('Penyaringan relevansi transformer gagal. Website belum dibuka; coba lagi setelah model siap.')
-            selected = selection['selected']
-            with ThreadPoolExecutor(max_workers=3) as pool:
-                results = pool.map(read_source, [item['url'] for item in selected])
-                for candidate, (articles, failures) in zip(selected, results):
-                    errors.extend(f['error'] for f in failures)
-                    for article in articles:
-                        excerpt = related_excerpt(article['text'], text)
-                        sources.append({'title': article['title'], 'url': article['url'],
-                                        'excerpt': excerpt, 'text': article['text'],
-                                        'relevance': candidate['relevance'],
-                                        'characters_read': len(article['text']), 'purpose': 'Pemeriksaan fakta'})
+            if selection['status'] == 'done':
+                sources, failures = read_candidates(selection, text)
+                errors.extend(failures)
             terms.extend(explain_terms(term_candidates(text, getattr(request, 'linked_terms', ())), sources))
-        except Exception:
-            errors.append('Pencarian sumber gagal. Periksa koneksi internet lalu coba scan lagi.')
+        except Exception as exc:
+            if search_status['status'] == 'not_run':
+                search_status = summarize_search([{'query': '', 'status': error_kind(exc), 'results': 0}], 0)
+                errors.append(search_status['message'])
+            else:
+                errors.append('Pemrosesan hasil pencarian gagal. Periksa sumber yang berhasil dibaca.')
     else:
         errors.append('Tidak ada teks, caption, atau subtitle yang dapat dipakai untuk mencari bukti.')
     analysis, analysis_error = None, ''
     try:
         analysis = classify_evidence(text, sources) if text else None
         if analysis is None:
-            analysis_error = 'Belum ada bukti yang dapat dibandingkan; persentase berbasis bukti belum tersedia.'
+            if search_status['status'] in {'failed', 'empty'}:
+                analysis_error = search_status['message']
+            elif selection['status'] == 'failed':
+                analysis_error = 'Kandidat ditemukan, tetapi penyaringan relevansi gagal dijalankan.'
+            elif selection['candidates'] and not selection['selected']:
+                analysis_error = 'Kandidat ditemukan, tetapi belum ada yang lolos seleksi relevansi.'
+            elif selection['selected'] and not sources:
+                analysis_error = 'Sumber terpilih, tetapi teks artikelnya belum berhasil dibaca. Lihat catatan akses.'
+            else:
+                analysis_error = 'Belum ada bukti yang dapat dibandingkan; persentase berbasis bukti belum tersedia.'
     except Exception:
         analysis_error = 'Perbandingan bukti gagal dijalankan. Periksa model lalu coba lagi; kutipan sumber tetap tersedia.'
     limitation = ''
@@ -166,10 +250,16 @@ def scan(request):
     reason = (f'{evidence_count} sumber terkait berhasil dibaca. ' if evidence_count else
               'Belum ada sumber pemeriksaan fakta yang berhasil dibaca. ')
     if selection['status'] == 'done':
-        reason += f"{len(selection['selected'])} dari {len(selection['candidates'])} kandidat dipilih sebelum website dibuka berdasarkan relevansi judul/ringkasan. "
+        reason += f"{len(selection['selected'])} dari {len(selection['candidates'])} kandidat dicoba setelah seleksi relevansi; target maksimal 5 sumber terbaca dengan batas 10 percobaan website. "
+        if selection.get('reading', {}).get('limit_reached'):
+            reason += 'Batas percobaan tercapai; sebagian kandidat belum dibuka. '
     reason += analysis['reason'] if analysis else analysis_error
+    if search_coverage['limited']:
+        reason += f' Pencarian dibatasi pada {len(query_units)} dari {total_query_units} bagian yang tersebar dari awal sampai akhir; sumber belum tentu mencakup semua kalimat.'
     return {'label': 'Sumber terkait ditemukan' if evidence_count else 'Bukti belum tersedia',
             'verification_status': 'evidence_compared' if analysis else 'not_assessed', 'text': text, 'terms': terms,
             'analysis': analysis, 'analysis_error': analysis_error, 'selection': selection,
+            'search_coverage': search_coverage,
+            'search': search_status,
             'sources': sources, 'errors': list(dict.fromkeys(errors)), 'limitation': limitation,
             'reason': reason}

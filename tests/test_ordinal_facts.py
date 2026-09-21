@@ -6,6 +6,36 @@ from app.relevance import rank_candidates
 
 
 class OrdinalTests(unittest.TestCase):
+    @patch('app.evidence.compare_pair', side_effect=AssertionError('Numbers must remain exact'))
+    def test_screenshot_wording_and_paraphrases(self, nli):
+        evidence = self.source('Prabowo Subianto merupakan Presiden Republik Indonesia ke-8.')
+        for name in ('Prabowo', 'Prabowo subianto', 'Pa prabowo subianto', 'Pak Prabowo', 'Bapak Prabowo'):
+            for prefix in ('', '- ', '* ', '\u2022 '):
+                for number in (8, 10):
+                    claim = f'{prefix}{name} merupakan presiden ke-{number}'
+                    with self.subTest(claim=claim):
+                        result = classify_evidence(claim, [evidence])
+                        self.assertIsNotNone(result['claim_fact'])
+                        self.assertEqual(result['counts']['support' if number == 8 else 'contradict'], 1)
+
+    def test_equivalent_office_phrasing(self):
+        for claim in ('Pak Prabowo ialah presiden RI kedelapan.',
+                      'Presiden Indonesia ke-8 adalah Prabowo',
+                      'Prabowo terpilih sebagai presiden ke\u20118 Indonesia'):
+            for body in ('Prabowo Subianto ialah Presiden Republik Indonesia ke-8.',
+                         'Presiden Indonesia kedelapan adalah Prabowo Subianto.',
+                         'Prabowo Subianto terpilih sebagai Presiden RI ke\u20138.'):
+                with self.subTest(claim=claim, body=body):
+                    self.assertEqual(compare_ordinal(body, parse_claim(claim))['relation'], 'support')
+
+    def test_normalization_does_not_remove_uncertainty_or_merge_claims(self):
+        for claim in ('- Pak Prabowo bukan presiden ke-8',
+                      '- Prabowo presiden ke-8\n- Gibran presiden ke-10',
+                      'Benarkah Pak Prabowo presiden ke-8?',
+                      'Presiden ke-8 adalah Prabowo atau Joko Widodo'):
+            with self.subTest(claim=claim):
+                self.assertIsNone(parse_claim(claim))
+
     def source(self, body, url='https://example.org/article'):
         return {'url': url, 'text': body, 'excerpt': body, 'purpose': 'Pemeriksaan fakta'}
 
@@ -83,8 +113,8 @@ class OrdinalTests(unittest.TestCase):
         self.assertIn('ke-8', result['comparisons'][0]['facts'][0]['quote'])
 
     @patch('app.evidence.compare_pair', side_effect=AssertionError('No invented numerical inference'))
-    def test_no_explicit_numbers_and_unsupported_claims_abstain(self, nli):
-        for claim in ('Prabowo presiden ke-20', 'Prabowo bukan presiden ke-20', 'Prabowo presiden ke-20 dan lahir di Jakarta'):
+    def test_no_explicit_numbers_abstains(self, nli):
+        for claim in ('Prabowo presiden ke-20',):
             result = classify_evidence(claim, [self.source('Prabowo merupakan presiden ke-8.' if 'dan' in claim else 'Prabowo dilantik pada 20 Oktober.')])
             self.assertEqual(result['counts']['unknown'], 1)
             self.assertEqual(result['scores'][RELATIONS[1]], 0)
