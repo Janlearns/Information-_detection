@@ -57,7 +57,7 @@ def compare_pair(premise, claim):
         if classifier._pipeline is None:
             from transformers import pipeline
             classifier._pipeline = pipeline('zero-shot-classification', model=classifier.MODEL_ID,
-                                             device=-1, trust_remote_code=False)
+                                             token=classifier.MODEL_TOKEN, device=-1, trust_remote_code=False)
         engine = classifier._pipeline
         mapping = {str(k).lower(): v for k, v in engine.model.config.label2id.items()}
         ids = [next((v for k, v in mapping.items() if k.startswith(name)), None)

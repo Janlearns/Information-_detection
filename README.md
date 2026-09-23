@@ -10,7 +10,20 @@ CekFakta membantu pengguna menemukan sumber yang berkaitan dengan sebuah klaim, 
 
 **Keterbatasan utama:** pencarian dapat gagal, sumber relevan dapat terlewat, dan kalimat yang benar secara fakta masih bisa menghasilkan “belum cukup bukti” karena bukti gagal dibaca atau hubungan antarentitas belum dikenali. Proyek ini mengintegrasikan model pralatih; belum melatih model pemeriksaan fakta sendiri.
 
-[Fitur](#fitur-saat-ini) · [Cara kerja & peran AI](#cara-kerja-sistem-dan-peran-ai) · [Instalasi](#instalasi) · [Keterbatasan](#kekurangan-dan-kasus-kegagalan) · [Belum tersedia](#kemampuan-yang-belum-tersedia) · [Pengujian](#pengujian)
+## Daftar isi
+
+- [Tentang proyek](#tentang-proyek) dan [fitur](#fitur-saat-ini)
+- [Cara kerja sistem dan peran AI](#cara-kerja-sistem-dan-peran-ai)
+- [Alur pemeriksaan dan makna persentase](#alur-pemeriksaan)
+- [Teknologi](#teknologi) dan [kebutuhan sistem](#kebutuhan-sistem)
+- [Instalasi dan konfigurasi .env](#instalasi)
+- [Cara menggunakan](#cara-menggunakan)
+- [API lokal](#api-lokal)
+- [Penanganan masalah](#penanganan-masalah)
+- [Kekurangan dan kasus kegagalan](#kekurangan-dan-kasus-kegagalan)
+- [Kemampuan yang belum tersedia](#kemampuan-yang-belum-tersedia) dan [rencana pengembangan](#rencana-pengembangan)
+- [Privasi dan aliran data](#privasi-dan-aliran-data)
+- [Struktur proyek](#struktur-proyek) dan [pengujian](#pengujian)
 
 ## Tentang proyek
 
@@ -50,6 +63,31 @@ Fokus teknis proyek meliputi:
 | Video | `.mp4`, `.mkv`, `.webm`, `.mov`, `.avi`, `.m4v` — bergantung pada dukungan codec |
 
 File audio, PDF, dan DOCX belum didukung sebagai input langsung. Teks dokumen dapat disalin dari aplikasi pembaca lalu diperiksa melalui clipboard.
+
+### Memilih mode penggunaan
+
+| Kebutuhan | Mode | Cara menjalankan |
+| --- | --- | --- |
+| Memeriksa file atau teks yang disalin dari aplikasi lain | Desktop lokal, alur pemeriksaan bukti utama | `start-local.cmd` |
+| Memeriksa teks/foto/video yang dipilih di website | Ekstensi browser dengan API lokal, alur pemeriksaan bukti utama | `start-desktop.cmd`, lalu gunakan menu klik kanan ekstensi |
+| Mengintegrasikan scan dengan skrip lain | API lokal | Jalankan server, lalu gunakan `/api/scan` atau `/api/scan/jobs` |
+| Mencoba klasifikasi kategori teks awal | Halaman web awal | Buka `http://127.0.0.1:8000` setelah server berjalan; hasilnya tidak setara dengan pemeriksaan bukti utama |
+
+Untuk percobaan pertama, gunakan desktop dan satu klaim pendek dengan subjek yang jelas. Setelah hasil pertama tampil, tinjau teks yang dianalisis, sumber yang terbaca, dan rincian hubungan bukti sebelum mencoba dokumen panjang atau OCR.
+
+### Batas input dan persiapan media
+
+| Input | Batas atau perlakuan saat ini |
+| --- | --- |
+| Teks lokal / clipboard / field teks API | Maksimal 30.000 karakter; file teks lokal juga dibatasi 2.000.000 byte. |
+| File teks UTF-16 | Harus memiliki penanda encoding (BOM); selain itu pembaca mencoba UTF-8, termasuk UTF-8 dengan BOM. |
+| Foto lokal | Maksimal 50.000.000 byte dan 40 megapiksel; orientasi EXIF diperbaiki sebelum konversi. |
+| Foto atau frame video lokal yang dikirim ke OCR | Diperkecil agar muat dalam 1.400 × 1.400 piksel dengan rasio tetap, lalu diubah menjadi JPEG kualitas 85 di memori. |
+| Frame melalui API | Data URL JPEG/PNG; field maksimal 2.800.000 karakter, hasil decode maksimal 2.000.000 byte dan 4 megapiksel. |
+| Video lokal | Satu frame pada posisi detik yang dipilih; keberhasilan pembacaan bergantung codec dan posisi frame. |
+| SRT / VTT | Dibaca sebagai teks; belum ada parser subtitle khusus untuk menghapus seluruh timestamp dan metadata. |
+
+Jika nama atau angka pada hasil OCR tidak sesuai gambar, perbaiki teks secara manual melalui clipboard dan lakukan scan teks. Antarmuka belum menyediakan editor koreksi OCR sebelum pencarian.
 
 ## Cara kerja sistem dan peran AI
 
@@ -174,6 +212,7 @@ Untuk kalimat pelantikan dengan pasangan orang-jabatan atau sisipan keterangan, 
 | --- | --- |
 | Bahasa | Python dan JavaScript |
 | API lokal | FastAPI, Uvicorn |
+| Konfigurasi lokal | python-dotenv, environment variable |
 | Inferensi model | PyTorch, Hugging Face Transformers |
 | Model NLI bawaan | `MoritzLaurer/multilingual-MiniLMv2-L6-mnli-xnli` |
 | Penemuan sumber | DDGS |
@@ -234,7 +273,43 @@ py -3.11 -m venv .venv
 
 File tersebut mencakup dependensi API, model AI, OCR, dan desktop. Pemanggilan interpreter secara langsung membuat aktivasi virtual environment tidak diperlukan.
 
+Dependensi disusun bertingkat: `requirements.txt` berisi API, crawler, pencarian, dan pembaca `.env`; `requirements-ai.txt` menambahkan PyTorch serta Transformers; `requirements-desktop.txt` menambahkan Qt dan OCR. Gunakan paket desktop untuk mengikuti seluruh panduan ini. Memasang `requirements.txt` saja belum cukup untuk menjalankan inferensi AI dan OCR.
+
 Model NLI dan OCR dimuat saat dibutuhkan. Pada penggunaan pertama, pastikan koneksi tersedia dan beri waktu untuk unduhan model. Alur bawaan tidak memerlukan API key berbayar.
+
+### 4. Siapkan konfigurasi `.env`
+
+Aplikasi otomatis membaca `.env` di direktori utama proyek saat dijalankan melalui desktop, API, atau skrip scan. Untuk checkout baru, salin contoh jika `.env` belum tersedia:
+
+```powershell
+if (!(Test-Path .env)) { Copy-Item .env.example .env }
+```
+
+Konfigurasi yang dapat digunakan:
+
+```dotenv
+MODEL_ID=MoritzLaurer/multilingual-MiniLMv2-L6-mnli-xnli
+HF_TOKEN=
+# HF_HOME=D:/model-cache/huggingface
+```
+
+| Variabel | Wajib? | Nilai bawaan / perilaku | Lokasi penggunaan |
+| --- | --- | --- | --- |
+| `MODEL_ID` | Tidak | Model multilingual MiniLM di atas; nilai kosong memakai model bawaan. | Kedua jalur pemuatan Transformer melalui `app/config.py`. |
+| `HF_TOKEN` | Tidak | Kosong; model publik bawaan tidak membutuhkan token. | Diteruskan ke pemuatan model di backend bila diisi. |
+| `HF_HOME` | Tidak | Cache standar library bila tidak diatur. | Dibaca library Hugging Face setelah `.env` dimuat; gunakan path absolut bila diubah. |
+
+Urutan pemuatan: Python mengimpor paket `app` → `app/__init__.py` membaca `.env` di akar proyek → `app/config.py` membaca pengaturan model/token → model dimuat saat inferensi pertama. Lokasi `.env` ditentukan dari lokasi paket, sehingga tidak bergantung pada direktori terminal saat aplikasi dipanggil. File UTF-8 dengan atau tanpa BOM dapat dibaca.
+
+`MODEL_ID` memilih model NLI; model pengganti harus menyediakan label `contradiction`, `entailment`, dan `neutral`. `HF_HOME` bersifat opsional untuk menentukan lokasi cache Hugging Face, dengan path absolut. Mengubah lokasi cache dapat memerlukan unduhan model kembali.
+
+Environment variable yang sudah ditetapkan pada proses lebih diutamakan daripada isi `.env`. Jika `.env` tidak tersedia, aplikasi tetap memakai konfigurasi bawaan. Mulai ulang aplikasi/server setelah mengubah konfigurasi. File `.env` diabaikan Git; `.env.example` disertakan sebagai contoh konfigurasi. Alur bawaan tetap tidak membutuhkan API key berbayar.
+
+`HF_TOKEN` hanya diperlukan bila mengakses model privat atau gated yang memerlukan izin. Isi token asli di `.env` lokal, bukan di `.env.example`, JavaScript, atau manifest ekstensi. Konfigurasi model dipusatkan di `app/config.py`; kedua jalur pemuatan model menggunakan token tersebut secara eksplisit. Jika kosong, aplikasi tidak menggunakan token login tersimpan secara otomatis. Lihat [dokumentasi environment variable Hugging Face](https://huggingface.co/docs/huggingface_hub/package_reference/environment_variables) untuk pengaturan token dan cache.
+
+`.env` adalah file teks biasa, bukan penyimpanan terenkripsi. `.gitignore` mengecualikan file environment, kredensial, private key, cache model pada folder yang disebutkan, dan file sementara Office. Simpan cache tambahan di luar repositori atau folder `model-cache/`. Aturan ignore tidak menghapus file yang sudah masuk Git maupun riwayat commit; jika kredensial pernah terpublikasi, cabut/ganti kredensial tersebut. Nama model publik, alamat loopback, dan batas keamanan crawler tetap boleh berada dalam kode karena bukan rahasia. API tetap untuk penggunaan lokal; `.env` tidak menambahkan autentikasi API.
+
+Untuk instalasi yang sudah ada, jalankan ulang perintah instalasi dependensi pada langkah 3 agar `python-dotenv` terpasang. Konfigurasi alamat API ekstensi tetap `127.0.0.1:8000` seperti pada launcher.
 
 ## Cara menggunakan
 
@@ -250,6 +325,15 @@ Model NLI dan OCR dimuat saat dibutuhkan. Pada penggunaan pertama, pastikan kone
 4. Tinjau hasil bersama kutipan dan tautan sumber.
 
 Mode desktop memanggil mesin scan secara langsung; server ekstensi tidak perlu dijalankan terpisah.
+
+Untuk langsung membuka satu file dan menjalankan scan melalui antarmuka desktop:
+
+```powershell
+.\.venv\Scripts\python.exe .\scan-local-file.py --file "D:\dokumen\contoh.txt"
+.\.venv\Scripts\python.exe .\scan-local-file.py --file "D:\video\contoh.mp4" --seconds 12.5
+```
+
+Ganti path contoh dengan file yang tersedia. Perintah ini membuka antarmuka Qt, bukan menghasilkan JSON di terminal. Untuk video, `--seconds` harus tidak negatif; jika dihilangkan, aplikasi memakai posisi awal. Untuk integrasi tanpa antarmuka desktop, gunakan API lokal.
 
 ### Ekstensi browser
 
@@ -277,6 +361,8 @@ Server dapat dijalankan tanpa launcher:
 
 Antarmuka web awal masih tersedia di `http://127.0.0.1:8000`, tetapi menggunakan klasifikasi teks awal dan belum mengikuti seluruh alur perbandingan bukti. Gunakan desktop atau ekstensi untuk mencoba alur utama proyek.
 
+Untuk menghentikan server, tekan `Ctrl+C` pada terminal tempat server berjalan. Menutup popup ekstensi tidak menghentikan pekerjaan scan yang sudah dimulai. Setelah mengubah `.env` atau kode Python, hentikan dan jalankan ulang server; launcher tidak mengaktifkan reload otomatis.
+
 ### Menu File Explorer — opsional
 
 ```powershell
@@ -284,6 +370,96 @@ powershell -NoProfile -ExecutionPolicy Bypass -File .\install-local-menu.ps1
 ```
 
 Skrip menambahkan menu **Scan dengan CekFakta** pada registry akun Windows saat ini untuk format yang didukung. Pada Windows 11, menu dapat berada di **Show more options**. Pasang ulang jika folder proyek dipindahkan karena registrasi menunjuk ke lokasi proyek. Video dari menu Explorer memakai frame awal.
+
+### Membaca hasil scan
+
+1. **Periksa teks input.** Pastikan teks pilihan, OCR, atau caption memuat klaim yang dimaksud, terutama nama, angka, dan kata penyangkalan.
+2. **Periksa status pencarian.** Bedakan pencarian berhasil, sebagian berhasil, kosong, dan gagal. Status ini menjelaskan ketersediaan kandidat, bukan kebenaran klaim.
+3. **Periksa sumber terbaca.** Kandidat pencarian belum tentu berhasil dibuka. Lihat jumlah artikel terbaca dan alasan kandidat gagal.
+4. **Baca hasil per kalimat.** Dukungan terhadap satu kalimat tidak berlaku otomatis untuk seluruh dokumen. Tinjau kutipan dan buka artikel untuk memeriksa konteks.
+5. **Baca jenis persentasenya.** Skor NLI menggambarkan hubungan teks; kesepakatan nomor urut menghitung sumber dengan bukti angka tegas. Keduanya memiliki dasar penghitungan berbeda.
+
+Jika `analysis` tidak tersedia, antarmuka dapat tetap menampilkan sumber atau pesan kegagalan. Jika analisis tersedia tetapi hubungan bukti netral/ambigu, artinya sumber sudah dibandingkan namun belum memberikan dukungan atau bantahan yang cukup jelas.
+
+## API lokal
+
+Server bawaan mendengarkan di `http://127.0.0.1:8000`. Dokumentasi interaktif tersedia di `http://127.0.0.1:8000/docs` dan skema di `/openapi.json`. Endpoint belum memakai autentikasi; jalankan untuk akses lokal dan jangan membuka server ke jaringan publik.
+
+| Metode dan endpoint | Kegunaan | Bentuk hasil |
+| --- | --- | --- |
+| `GET /api/health` | Memeriksa respons server dan konfigurasi nama model. | `status`, `model`, `model_loading`. Tidak menjalankan atau menguji inferensi model. |
+| `POST /api/scan/jobs` | Memulai pemeriksaan bukti di background. | Objek berisi `id` pekerjaan. |
+| `GET /api/scan/jobs/{id}` | Mengambil perkembangan/hasil pekerjaan. | `status: running`, atau `status: done` dengan `result`. |
+| `POST /api/scan` | Pemeriksaan bukti sinkron; permintaan menunggu scan selesai. | Objek hasil scan langsung. |
+| `POST /api/analyze` | Klasifikasi awal dari teks atau URL; dipakai halaman web awal. | `articles` dan `errors`; bukan alur pencarian bukti utama. |
+
+### Contoh permintaan dari PowerShell
+
+Jalankan server terlebih dahulu. Pemeriksaan health tidak mengunduh model:
+
+```powershell
+Invoke-RestMethod -Uri 'http://127.0.0.1:8000/api/health'
+```
+
+Mulai pekerjaan scan teks, lalu ambil statusnya. Ganti kalimat contoh dengan klaim yang ingin diperiksa; permintaan scan dapat mengakses internet dan memuat model:
+
+```powershell
+$payload = @{
+    kind = 'text'
+    text = 'Masukkan satu klaim yang ingin diperiksa.'
+} | ConvertTo-Json
+
+$scanJob = Invoke-RestMethod -Method Post `
+    -Uri 'http://127.0.0.1:8000/api/scan/jobs' `
+    -ContentType 'application/json; charset=utf-8' `
+    -Body ([System.Text.Encoding]::UTF8.GetBytes($payload))
+
+$scanStatus = Invoke-RestMethod `
+    -Uri "http://127.0.0.1:8000/api/scan/jobs/$($scanJob.id)"
+$scanStatus | ConvertTo-Json -Depth 20
+```
+
+Jika status masih `running`, jalankan ulang bagian pengambilan status setelah beberapa detik; jangan membuat pekerjaan baru untuk sekadar mengecek hasil. API menerima satu pekerjaan analisis aktif per proses; permintaan analisis lain mendapat HTTP 429 selama pekerjaan tersebut berjalan. Ini berbeda dari pembatasan layanan pencarian luar.
+
+Pekerjaan disimpan dalam memori, sehingga ID hilang ketika server dimulai ulang. Saat pekerjaan baru dibuat, entri yang sudah selesai dan berumur lebih dari 300 detik sejak dibuat dibersihkan. Ini bukan penyimpanan riwayat permanen atau jaminan masa simpan lima menit sejak selesai.
+
+### Field input dan hasil
+
+`/api/scan` dan `/api/scan/jobs` menerima JSON dengan `kind` bernilai `text`, `image`, atau `video`. Field `text` berisi klaim atau teks pendamping; `frame` berisi data URL gambar untuk OCR. API tidak menerima path file lokal atau file video mentah. Field opsional `media_note` dibatasi 500 karakter dan `linked_terms` maksimal 20 item.
+
+| Field hasil scan | Cara membacanya |
+| --- | --- |
+| `text` | Teks yang masuk ke pencarian dan analisis, termasuk OCR jika ada. |
+| `verification_status` | `evidence_compared` jika hasil analisis tersedia; `not_assessed` jika belum dapat dibandingkan. |
+| `search` | Status pencarian, percobaan kueri, pemakaian cache, dan waktu tunggu. |
+| `search_coverage` | Jumlah bagian pencarian yang tersedia/dipilih dan penanda cakupan terbatas. |
+| `selection` | Kandidat, relevansi, hasil seleksi, serta catatan pembacaan website. |
+| `sources` | Artikel yang terbaca: URL, judul, kutipan tampilan, dan teks hasil ekstraksi. |
+| `analysis` | Skor dan perbandingan bukti, atau `null` jika tidak tersedia. Untuk beberapa kalimat, lihat `analysis.statements`. |
+| `analysis_error` | Alasan analisis belum tersedia. |
+| `terms` | Definisi kamus atau kutipan definisi dari sumber. |
+| `errors`, `limitation`, `reason` | Catatan kegagalan, keterbatasan input, dan ringkasan proses. |
+
+Skor pada JSON menggunakan skala 0–1; antarmuka mengubahnya menjadi persentase. Respons HTTP berhasil berarti permintaan diproses, bukan berarti sumber ditemukan atau klaim didukung. Periksa field status dan hasil analisis.
+
+## Penanganan masalah
+
+| Gejala | Pemeriksaan dan tindakan |
+| --- | --- |
+| `No module named dotenv`, `torch`, atau `PySide6` | Jalankan ulang instalasi `requirements-desktop.txt` menggunakan `.venv\Scripts\python.exe`; pastikan launcher memakai environment proyek. |
+| Model belum siap / pemuatan pertama lama | Periksa koneksi, ruang cache, `MODEL_ID`, dan izin model jika memakai token. Nama model pengganti harus menyediakan label NLI yang didukung. Health yang berhasil belum membuktikan model siap. |
+| Perubahan `.env` tidak berpengaruh | Pastikan file bernama `.env`, bukan `.env.txt`, berada di akar proyek; restart aplikasi. Environment variable proses lebih diprioritaskan. |
+| Ekstensi gagal menghubungi server | Jalankan `start-desktop.cmd`, lalu periksa `/api/health`. Reload ekstensi dan halaman setelah perubahan JavaScript. |
+| Port 8000 sudah dipakai | Periksa apakah server proyek sudah berjalan. Gunakan proses tersebut atau hentikan proses yang memang Anda jalankan sebelum memulai lagi. Mengubah port launcher saja membuat alamat ekstensi tidak cocok. |
+| HTTP 429 dari API lokal: scan lain berjalan | Tunggu pekerjaan aktif selesai. Jangan berulang kali menekan Scan. |
+| Pencarian timeout / rate limit / CAPTCHA | Baca `search.attempts` dan `retry_after_seconds`, lalu tunggu sesuai catatan. Tidak ada jaminan layanan luar pulih setelah jeda lokal berakhir. |
+| Kandidat ada, tetapi artikel tidak terbaca | Baca catatan crawler; situs dapat diblokir, membutuhkan login/JavaScript, atau menolak crawler. Sistem mencoba kandidat cadangan yang relevan dalam batasnya. |
+| OCR kosong atau keliru | Gunakan gambar dengan tulisan lebih jelas atau salin teks yang benar ke clipboard; foto tidak dianalisis untuk keaslian visual. |
+| Frame video gagal dibaca | Pastikan format/codec dapat dibuka dan waktu frame berada dalam durasi video; coba posisi lain. |
+| Hasil semua “belum cukup/ambigu” | Buka kutipan dan sumber; pastikan bukti membahas subjek, konteks, dan angka yang sama. Tidak ada sumber tegas berarti tidak ada dasar untuk memaksakan dukungan/bantahan. |
+| Menu Explorer tidak muncul / path lama | Pada Windows 11, periksa **Show more options**. Jalankan ulang pemasangan menu setelah memindahkan folder proyek. |
+
+Saat melaporkan masalah, sertakan mode penggunaan, jenis input, langkah reproduksi, dan pesan status yang sudah diperiksa agar tidak memuat data pribadi. Jangan menyertakan `.env` atau token asli. Untuk masalah model, pesan API sengaja tidak meneruskan detail exception internal tertentu.
 
 ## Kekurangan dan kasus kegagalan
 
@@ -341,10 +517,21 @@ Daftar berikut adalah arah pengembangan, **belum fitur yang tersedia atau janji 
 - Crawler mengakses website publik yang terpilih. Piksel media diproses dalam memori oleh alur scan; file asli tidak diubah.
 - Model dapat diunduh dan disimpan dalam cache lokal pada penggunaan pertama.
 
+| Tujuan data | Data yang digunakan | Kapan terjadi |
+| --- | --- | --- |
+| Proses desktop atau API di komputer pengguna | Input pilihan, piksel frame untuk OCR, artikel hasil ekstraksi, dan hasil analisis. | Selama scan dan penampilan hasil; pekerjaan API disimpan sementara di memori. |
+| Layanan pencarian melalui DDGS | Kueri yang disusun dari potongan teks input. | Saat kueri belum tersedia di cache dan pencarian tidak sedang dijeda. |
+| Website sumber | Permintaan halaman dan pemeriksaan akses seperti `robots.txt`. | Saat crawler membaca kandidat. |
+| Layanan penyedia model | Permintaan berkas/metadata model; token bila dikonfigurasi untuk pemuatan model. | Saat library perlu mengakses model; bobot tersimpan dalam cache lokal. |
+
+Konfigurasi `.env` tidak dikirim sebagai objek konfigurasi ke frontend. Token model hanya dipakai pada jalur pemuatan model; nama model tetap ditampilkan oleh health API dan sebagian hasil. Input yang mengandung informasi pribadi dapat ikut menjadi kueri pencarian, sehingga pilih hanya teks yang sesuai untuk dikirim ke layanan luar.
+
 ## Struktur proyek
 
 ```text
 app/
+  __init__.py          Pemuatan .env sebelum modul aplikasi
+  config.py            Konfigurasi model dan token backend
   main.py              API dan pengelolaan pekerjaan scan
   context_scan.py      Orkestrasi pemeriksaan utama
   relevance.py         Seleksi kandidat sebelum crawling
@@ -363,6 +550,9 @@ requirements*.txt      Dependensi bertingkat
 start-local.cmd        Launcher desktop lokal
 start-desktop.cmd      Launcher server untuk ekstensi
 install-local-menu.ps1 Integrasi menu File Explorer
+.env                  Konfigurasi lokal, diabaikan Git
+.env.example          Contoh konfigurasi tanpa token asli
+.gitignore            Pengecualian file lokal, kredensial, dan artefak
 ```
 
 ## Pengujian

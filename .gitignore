@@ -32,6 +32,21 @@ share/python-wheels/
 *.secret
 credentials*.json
 service-account*.json
+secrets/
+.secrets/
+.aws/
+.azure/
+.ssh/
+.netrc
+_netrc
+.pypirc
+*.pem
+*.key
+*.p12
+*.pfx
+*.jks
+*.keystore
+.envrc
 
 # Caches, test output, and coverage reports
 .cache/
@@ -41,6 +56,11 @@ service-account*.json
 .coverage
 .coverage.*
 htmlcov/
+# Downloaded models may contain cached authentication or private weights.
+.huggingface/
+.hf/
+.EasyOCR/
+model-cache/
 
 # Local logs and databases
 *.log
@@ -53,3 +73,10 @@ htmlcov/
 Thumbs.db
 *.swp
 *.swo
+# Office lock files, local editor settings, and backup copies.
+~$*
+*.tmp
+*.bak
+*.orig
+.idea/
+.vscode/

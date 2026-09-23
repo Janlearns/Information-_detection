@@ -107,8 +107,8 @@ def analyze(request: AnalyzeRequest):
     except ValueError as exc:
         raise HTTPException(400, str(exc)) from exc
     except RuntimeError as exc:
-        raise HTTPException(503, str(exc)) from exc
+        raise HTTPException(503, 'Model belum siap. Periksa dependensi, koneksi, dan konfigurasi model/token lokal.') from exc
     except OSError as exc:
-        raise HTTPException(502, "Tidak dapat mengakses situs: " + str(exc)) from exc
+        raise HTTPException(502, 'Tidak dapat mengakses sumber. Periksa koneksi dan alamat situs.') from exc
     finally:
         _job.release()

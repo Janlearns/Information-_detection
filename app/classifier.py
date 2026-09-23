@@ -1,7 +1,6 @@
-import os
 import threading
+from app.config import MODEL_ID, MODEL_TOKEN
 
-MODEL_ID = os.getenv("MODEL_ID", "MoritzLaurer/multilingual-MiniLMv2-L6-mnli-xnli")
 LABELS = ["informasi hoaks atau klaim menyesatkan", "informasi faktual yang dapat diverifikasi", "opini atau informasi yang belum cukup bukti"]
 _pipeline = None
 _lock = threading.Lock()
@@ -14,9 +13,9 @@ def classify(text):
         if _pipeline is None:
             try:
                 from transformers import pipeline
-                _pipeline = pipeline("zero-shot-classification", model=MODEL_ID, device=-1, trust_remote_code=False)
+                _pipeline = pipeline("zero-shot-classification", model=MODEL_ID, token=MODEL_TOKEN, device=-1, trust_remote_code=False)
             except Exception as exc:
-                raise RuntimeError("Model belum siap. Instal requirements-ai.txt dan pastikan internet tersedia untuk unduhan pertama. Detail: " + str(exc)) from exc
+                raise RuntimeError("Model belum siap. Periksa dependensi, koneksi, dan konfigurasi model/token lokal.") from exc
         # Bound inference and make coverage explicit. Each chunk stays under model context.
         tokenizer = _pipeline.tokenizer
         tokens = tokenizer.encode(text, add_special_tokens=False)

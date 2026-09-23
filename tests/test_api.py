@@ -4,6 +4,13 @@ from fastapi import HTTPException
 from app.main import AnalyzeRequest, analyze, health, index
 
 class ApiTests(unittest.TestCase):
+    def test_internal_errors_do_not_expose_credentials(self):
+        for failure in (RuntimeError('private-token-sentinel'), OSError('private-token-sentinel')):
+            with self.subTest(failure=type(failure).__name__), patch('app.main.classify', side_effect=failure):
+                with self.assertRaises(HTTPException) as ctx:
+                    analyze(AnalyzeRequest(text='contoh berita ' * 20))
+                self.assertNotIn('private-token-sentinel', ctx.exception.detail)
+
     def test_static_and_health(self):
         self.assertEqual(health()['status'], 'ok')
         self.assertTrue(index().path.is_file())
