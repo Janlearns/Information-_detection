@@ -10,7 +10,7 @@ CekFakta membantu pengguna menemukan sumber yang berkaitan dengan sebuah klaim, 
 
 **Keterbatasan utama:** pencarian dapat gagal, sumber relevan dapat terlewat, dan kalimat yang benar secara fakta masih bisa menghasilkan “belum cukup bukti” karena bukti gagal dibaca atau hubungan antarentitas belum dikenali. Proyek ini mengintegrasikan model pralatih; belum melatih model pemeriksaan fakta sendiri.
 
-[Fitur](#fitur-saat-ini) · [Instalasi](#instalasi) · [Keterbatasan](#kekurangan-dan-kasus-kegagalan) · [Belum tersedia](#kemampuan-yang-belum-tersedia) · [Pengujian](#pengujian)
+[Fitur](#fitur-saat-ini) · [Cara kerja & peran AI](#cara-kerja-sistem-dan-peran-ai) · [Instalasi](#instalasi) · [Keterbatasan](#kekurangan-dan-kasus-kegagalan) · [Belum tersedia](#kemampuan-yang-belum-tersedia) · [Pengujian](#pengujian)
 
 ## Tentang proyek
 
@@ -50,6 +50,73 @@ Fokus teknis proyek meliputi:
 | Video | `.mp4`, `.mkv`, `.webm`, `.mov`, `.avi`, `.m4v` — bergantung pada dukungan codec |
 
 File audio, PDF, dan DOCX belum didukung sebagai input langsung. Teks dokumen dapat disalin dari aplikasi pembaca lalu diperiksa melalui clipboard.
+
+## Cara kerja sistem dan peran AI
+
+Sistem berjalan ketika pengguna menekan **Scan**. Input diubah menjadi teks, digunakan untuk mencari sumber di internet, lalu dibandingkan dengan isi artikel yang berhasil dibaca. AI membantu membaca tulisan pada gambar dan menilai hubungan makna antara klaim dengan sumber. Pencarian, pengambilan halaman, pemeriksaan angka, dan penghitungan hasil diatur oleh kode aplikasi.
+
+```text
+Pengguna memilih teks / foto / satu frame video
+                      |
+                      v
+Persiapan teks (OCR untuk tulisan pada gambar)
+                      |
+                      v
+Pemisahan kalimat dan penyusunan kueri pencarian
+                      |
+                      v
+Pencarian web melalui DDGS
+                      |
+                      v
+Seleksi relevansi judul dan ringkasan dengan NLI / aturan nomor urut
+                      |
+                      v
+Crawler membaca artikel (target maksimal 5 sumber; hingga 10 website dicoba)
+                      |
+                      v
+Perbandingan isi artikel dengan setiap kalimat input
+         NLI untuk hubungan makna + aturan untuk pola nomor urut
+                      |
+                      v
+Penggabungan skor, kutipan, tautan, dan catatan keterbatasan
+                      |
+                      v
+Pengguna meninjau hasil dan sumbernya
+```
+
+### Dari antarmuka ke mesin pemeriksaan
+
+Pada **desktop**, `app/local_scan.py` menyiapkan input file, lalu mesin pemeriksaan di `app/context_scan.py` menjalankan scan. Teks clipboard juga masuk ke mesin yang sama. Pada **ekstensi browser**, input pilihan dikirim ke API lokal di `app/main.py`; aplikasi menjalankan pekerjaan scan dan ekstensi mengambil hasilnya untuk ditampilkan. Dengan demikian, kedua antarmuka memakai alur pemeriksaan bukti yang sama.
+
+Mesin pemeriksaan mengoordinasikan pencarian, seleksi kandidat, pembacaan artikel, dan analisis. `app/relevance.py` memilih kandidat, `app/crawler.py` mengambil isi halaman, dan `app/evidence.py` membandingkan bukti serta menggabungkan hasil. Jika pencarian atau pembacaan gagal, status kegagalan diteruskan ke antarmuka; tidak adanya artikel tidak menghasilkan kesimpulan bahwa klaim salah.
+
+### Apa yang dikerjakan AI?
+
+| Tahap | Peran AI | Peran kode aplikasi |
+| --- | --- | --- |
+| Membaca foto atau frame video | EasyOCR mengenali tulisan berbahasa Indonesia dan Inggris menjadi teks. | Menyiapkan gambar/frame dan menggabungkan teks OCR dengan teks pendamping yang tersedia. |
+| Memilih sumber | Model NLI menilai apakah judul dan ringkasan mendukung, membantah, atau tidak cukup berkaitan dengan klaim. | Menjumlahkan skor mendukung dan membantah sebagai relevansi, menerapkan ambang seleksi, memeriksa pola nomor urut, serta membatasi dan mengurutkan website. |
+| Membandingkan bukti | Model NLI menilai hubungan makna isi artikel dengan kalimat input. | Membagi teks panjang menjadi potongan yang muat dalam model, memprosesnya bertahap, dan menggabungkan skor bagian yang relevan. |
+| Memeriksa nomor urut jabatan | Pada pola tambahan tertentu, NLI membantu memeriksa hubungan orang dengan jabatan dalam kutipan. | Parser di `app/ordinal_facts.py` mencocokkan subjek, jabatan, lingkup, dan nomor; angka dari sumber dibandingkan secara langsung. |
+| Menyajikan hasil | Skor NLI menjadi salah satu bahan hasil analisis. | Menghapus sumber duplikat, menghitung agregat atau kesepakatan bukti, lalu menyusun ringkasan, kutipan, tautan, dan pesan status. |
+
+**NLI (Natural Language Inference)** menerima pasangan teks: isi sumber sebagai *premis* dan kalimat pengguna sebagai *klaim yang diuji*. Model menghasilkan tiga skor hubungan: **mendukung**, **membantah**, dan **netral/belum cukup**. Sumber yang membantah tetap penting untuk dipilih karena relevansi tidak sama dengan persetujuan terhadap klaim.
+
+Model bawaan adalah `MoritzLaurer/multilingual-MiniLMv2-L6-mnli-xnli`, sebuah Transformer pralatih. Saat scan, aplikasi melakukan **inferensi**, yaitu memakai model yang sudah dilatih untuk menghitung skor pada input baru. Scan tidak melatih ulang model atau otomatis menambahkan fakta ke pengetahuannya. NLI dan OCR dimuat saat dibutuhkan dan dijalankan secara lokal pada CPU; pencarian web serta pengambilan artikel tetap menggunakan internet.
+
+Ringkasan hasil disusun dari skor, aturan, dan teks sumber oleh aplikasi. Alur ini tidak memakai model generatif untuk mengarang jawaban atau artikel bukti. Penjelasan istilah berasal dari kamus awal atau kalimat definisi yang ditemukan dalam artikel. Kutipan yang ditampilkan membantu peninjauan, sedangkan perbandingan NLI memproses seluruh teks hasil ekstraksi secara bertahap; kutipan tampilan bukan penjelasan lengkap atas setiap skor model.
+
+### Contoh proses satu klaim
+
+Misalnya pengguna memasukkan **“Tokoh A adalah presiden ke-4 Negara B.”** Contoh ini bersifat ilustratif:
+
+1. Aplikasi mengenali pola subjek, jabatan, negara, dan nomor urut, lalu menyusun kueri untuk mencari sumber terkait.
+2. Hasil pencarian disaring berdasarkan hubungannya dengan klaim. Artikel yang menyebut nomor berbeda tetap dapat dipilih sebagai calon bukti bantahan.
+3. Crawler membuka kandidat terpilih dan mengambil teks artikelnya. Judul atau ringkasan pencarian saja tidak digunakan sebagai bukti akhir.
+4. Jika isi artikel secara jelas menyebut Tokoh A sebagai presiden ke-4 Negara B, pemeriksaan terstruktur mencatat dukungan. Jika menyebut ke-5 dengan subjek, jabatan, dan lingkup yang cocok, hasilnya bantahan. Jika hubungan tersebut tidak jelas atau bukti angkanya ambigu, hasilnya belum cukup.
+5. Aplikasi menggabungkan hasil dari sumber unik yang terbaca dan menampilkan kesepakatan beserta cakupannya. Pengguna dapat membuka tautan untuk memeriksa konteks asli.
+
+Untuk klaim umum yang tidak masuk pola nomor urut, hubungan bukti dinilai melalui NLI. Persentase yang ditampilkan merupakan skor hubungan teks, bukan peluang bahwa klaim pasti benar. Peran AI adalah membantu menemukan dan membandingkan bukti; kualitas sumber dan ketepatan pembacaan tetap menentukan kegunaan hasil.
 
 ## Alur pemeriksaan
 
