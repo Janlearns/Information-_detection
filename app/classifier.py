@@ -1,5 +1,6 @@
 import threading
 from app.config import MODEL_ID, MODEL_TOKEN
+import pandas
 
 LABELS = ["informasi hoaks atau klaim menyesatkan", "informasi faktual yang dapat diverifikasi", "opini atau informasi yang belum cukup bukti"]
 _pipeline = None
